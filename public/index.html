@@ -1,0 +1,1090 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Word Race</title>
+<meta name="description" content="Real-time multiplayer word prefix race. Last player standing wins.">
+<meta name="theme-color" content="#0d1117">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Word Race">
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel-2: #1f2630;
+    --border: #2a313c;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --good: #3fb950;
+    --warn: #d29922;
+    --bad: #f85149;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    min-height: 100vh;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    padding-top: calc(16px + env(safe-area-inset-top));
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+    padding-left: calc(16px + env(safe-area-inset-left));
+    padding-right: calc(16px + env(safe-area-inset-right));
+  }
+  .screen {
+    width: 100%;
+    max-width: 560px;
+    display: none;
+  }
+  .screen.active { display: block; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 28px 24px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+  }
+  h1 {
+    margin: 0 0 4px;
+    font-size: 28px;
+    letter-spacing: -0.02em;
+  }
+  h1 .accent { color: var(--accent); }
+  .subtitle {
+    color: var(--muted);
+    font-size: 14px;
+    margin-bottom: 24px;
+  }
+  label {
+    display: block;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  input[type="text"] {
+    width: 100%;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 16px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  input[type="text"]:focus {
+    border-color: var(--accent);
+  }
+  .field { margin-bottom: 16px; }
+  button {
+    width: 100%;
+    background: var(--accent);
+    color: #0d1117;
+    border: 0;
+    border-radius: 10px;
+    padding: 13px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: transform 0.05s, opacity 0.15s;
+  }
+  button:hover { opacity: 0.92; }
+  button:active { transform: translateY(1px); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  button.ghost {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .err {
+    background: rgba(248, 81, 73, 0.12);
+    border: 1px solid rgba(248, 81, 73, 0.4);
+    color: #ffb4b0;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 14px;
+    margin-bottom: 14px;
+    display: none;
+  }
+  .err.show { display: block; }
+
+  /* Lobby/waiting room */
+  .room-code-pill {
+    display: inline-block;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--accent);
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-family: "SF Mono", ui-monospace, Menlo, monospace;
+    font-size: 14px;
+    letter-spacing: 0.1em;
+    margin-bottom: 18px;
+  }
+  .player-list {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 18px;
+  }
+  .player-list li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 8px;
+    font-size: 15px;
+  }
+  .player-list li.dead {
+    opacity: 0.45;
+    text-decoration: line-through;
+  }
+  .player-list li.current {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+  .badge {
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: var(--border);
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .badge.you { background: rgba(88, 166, 255, 0.18); color: var(--accent); }
+  .badge.host { background: rgba(63, 185, 80, 0.18); color: var(--good); }
+
+  /* Settings (host-configurable) */
+  .settings {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 18px;
+  }
+  .setting-group { margin-bottom: 14px; }
+  .setting-group:last-of-type { margin-bottom: 0; }
+  .seg {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .seg button {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 64px;
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 10px 8px;
+    font-size: 14px;
+    font-weight: 500;
+    border-radius: 8px;
+  }
+  .seg button.selected {
+    border-color: var(--accent);
+    background: rgba(88, 166, 255, 0.16);
+    color: var(--accent);
+  }
+  .seg button:disabled { opacity: 1; cursor: default; }
+  .seg button.selected:disabled { opacity: 1; }
+  .setting-hint {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 10px;
+  }
+
+  /* Game screen */
+  .prefix-display {
+    text-align: center;
+    margin: 8px 0 16px;
+  }
+  .prefix-label {
+    color: var(--muted);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    margin-bottom: 6px;
+  }
+  .prefix {
+    font-size: 64px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--accent);
+    font-family: "SF Mono", ui-monospace, Menlo, monospace;
+    line-height: 1;
+  }
+  .prefix .dots {
+    color: var(--muted);
+    font-weight: 400;
+  }
+  .turn-info {
+    text-align: center;
+    color: var(--muted);
+    font-size: 14px;
+    margin-bottom: 18px;
+  }
+  .turn-info strong { color: var(--text); }
+  .timer-wrap {
+    display: flex;
+    justify-content: center;
+    margin: 8px 0 20px;
+  }
+  .timer-ring {
+    position: relative;
+    width: 130px;
+    height: 130px;
+  }
+  .timer-ring svg {
+    transform: rotate(-90deg);
+    width: 100%;
+    height: 100%;
+  }
+  .timer-ring circle.bg {
+    fill: none;
+    stroke: var(--panel-2);
+    stroke-width: 8;
+  }
+  .timer-ring circle.fg {
+    fill: none;
+    stroke: var(--good);
+    stroke-width: 8;
+    stroke-linecap: round;
+    transition: stroke-dashoffset 0.1s linear, stroke 0.3s;
+  }
+  .timer-ring.warn circle.fg { stroke: var(--warn); }
+  .timer-ring.danger circle.fg {
+    stroke: var(--bad);
+    animation: pulse 0.6s infinite alternate;
+  }
+  @keyframes pulse {
+    from { opacity: 1; }
+    to { opacity: 0.55; }
+  }
+  .timer-num {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 44px; font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+    transition: color 0.3s;
+  }
+  .timer-ring.warn .timer-num { color: var(--warn); }
+  .timer-ring.danger .timer-num { color: var(--bad); }
+
+  .your-turn-banner {
+    background: rgba(88, 166, 255, 0.1);
+    border: 1px solid rgba(88, 166, 255, 0.4);
+    color: var(--accent);
+    text-align: center;
+    padding: 8px;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    display: none;
+  }
+  .your-turn-banner.show { display: block; }
+
+  #wordInput { font-size: 18px; text-align: center; letter-spacing: 0.02em; }
+  #wordInput:disabled { opacity: 0.5; }
+
+  .used-section {
+    margin-top: 22px;
+    border-top: 1px solid var(--border);
+    padding-top: 16px;
+  }
+  .used-section h3 {
+    margin: 0 0 8px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .used-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-height: 110px;
+    overflow-y: auto;
+  }
+  .used-list .pill {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 13px;
+    font-family: "SF Mono", ui-monospace, Menlo, monospace;
+    color: var(--muted);
+  }
+  .used-list .pill.new {
+    color: var(--good);
+    border-color: rgba(63, 185, 80, 0.4);
+  }
+
+  .log {
+    margin-top: 12px;
+    font-size: 13px;
+    color: var(--muted);
+    min-height: 18px;
+    text-align: center;
+  }
+  .log.bad { color: var(--bad); }
+  .log.good { color: var(--good); }
+
+  /* Out / winner */
+  .center-emoji {
+    font-size: 56px;
+    text-align: center;
+    margin-bottom: 12px;
+  }
+  .out-reason {
+    text-align: center;
+    color: var(--muted);
+    font-size: 15px;
+    margin-bottom: 18px;
+  }
+  .winner-name {
+    text-align: center;
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--good);
+    margin-bottom: 4px;
+  }
+
+  /* Profile screen */
+  .secondary-row { margin-top: 10px; }
+  .profile-header { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
+  .avatar {
+    width: 64px; height: 64px; border-radius: 16px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 30px; font-weight: 700; color: #fff; flex-shrink: 0;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+  }
+  .pf-meta { flex: 1; min-width: 0; }
+  .pf-name { font-size: 22px; font-weight: 700; margin-bottom: 5px; word-break: break-word; }
+  .pf-sub { display: flex; align-items: center; gap: 8px; }
+  .pf-level { color: var(--muted); font-size: 14px; }
+  .tier-badge {
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+    padding: 3px 10px; border-radius: 999px; border: 1px solid currentColor;
+  }
+  .xp-bar {
+    height: 10px; background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 999px; overflow: hidden; margin-bottom: 6px;
+  }
+  .xp-fill {
+    height: 100%; width: 0%;
+    background: linear-gradient(90deg, var(--accent), #8a7cff);
+    transition: width 0.6s ease;
+  }
+  .xp-text { font-size: 12px; color: var(--muted); margin-bottom: 20px; }
+  .stat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 22px; }
+  .stat-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .stat-val { font-size: 20px; font-weight: 700; }
+  .stat-key { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 2px; }
+  .section-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; margin-bottom: 10px; }
+  .ach-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 18px; }
+  .ach { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px; text-align: center; }
+  .ach.off { opacity: 0.4; filter: grayscale(1); }
+  .ach.on { border-color: rgba(241,196,15,0.5); box-shadow: 0 0 0 1px rgba(241,196,15,0.25); }
+  .ach-icon { font-size: 26px; line-height: 1; margin-bottom: 6px; }
+  .ach-name { font-size: 13px; font-weight: 600; }
+  .ach-desc { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  /* Post-game recap */
+  .recap { background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin: 16px 0; text-align: left; }
+  .recap-row { display: flex; justify-content: space-between; font-size: 14px; padding: 5px 0; border-bottom: 1px dashed var(--border); }
+  .recap-row:last-child { border-bottom: 0; }
+  .recap-row span { color: var(--muted); }
+  .xp-gain { margin-top: 12px; text-align: center; font-size: 16px; font-weight: 700; color: var(--accent); }
+  .levelup { color: var(--good); }
+  .recap-ach { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+  .ach-pill { font-size: 12px; font-weight: 600; background: rgba(241,196,15,0.14); color: #f1c40f; border: 1px solid rgba(241,196,15,0.4); padding: 4px 10px; border-radius: 999px; }
+  .out-winner-line { font-size: 18px; font-weight: 700; color: var(--good); text-align: center; margin-bottom: 8px; min-height: 0; }
+  .out-winner-line:empty { margin: 0; }
+
+  @media (max-width: 420px) {
+    .prefix { font-size: 52px; }
+    .timer-ring { width: 110px; height: 110px; }
+    .timer-num { font-size: 38px; }
+    h1 { font-size: 24px; }
+    .card { padding: 22px 18px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- LOBBY -->
+<div id="screen-lobby" class="screen active">
+  <div class="card">
+    <h1>Word <span class="accent">Race</span></h1>
+    <div class="subtitle">Name a word starting with the given prefix before the timer runs out. Last player standing wins.</div>
+    <div id="lobbyErr" class="err"></div>
+    <div class="field">
+      <label for="usernameInput">Username</label>
+      <input id="usernameInput" type="text" placeholder="e.g. Alex" maxlength="20" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="roomInput">Room code</label>
+      <input id="roomInput" type="text" placeholder="e.g. PARTY" maxlength="10" autocomplete="off" style="text-transform: uppercase;">
+    </div>
+    <button id="joinBtn">Join / Create Room</button>
+    <button id="profileBtn" class="ghost secondary-row">📊 My profile &amp; stats</button>
+  </div>
+</div>
+
+<!-- WAITING ROOM -->
+<div id="screen-waiting" class="screen">
+  <div class="card">
+    <div class="room-code-pill">Room <span id="roomCodeText"></span></div>
+    <h1>Waiting room</h1>
+    <div class="subtitle"><span id="waitingMsg">Share the room code with friends and start when ready.</span></div>
+    <div id="waitingErr" class="err"></div>
+
+    <div class="settings">
+      <div class="setting-group">
+        <label>Seconds per turn</label>
+        <div class="seg" id="timeSeg">
+          <button type="button" data-time="15">15s</button>
+          <button type="button" data-time="30">30s</button>
+          <button type="button" data-time="45">45s</button>
+          <button type="button" data-time="60">60s</button>
+        </div>
+      </div>
+      <div class="setting-group">
+        <label>Prefix mode</label>
+        <div class="seg" id="prefixSeg">
+          <button type="button" data-mode="shuffle">Shuffle each word</button>
+          <button type="button" data-mode="same">Same prefix</button>
+        </div>
+      </div>
+      <div class="setting-hint" id="settingHint"></div>
+    </div>
+
+    <ul id="playerList" class="player-list"></ul>
+    <button id="startBtn" disabled>Start game</button>
+    <button id="leaveBtn1" class="ghost" style="margin-top: 8px;">Leave</button>
+  </div>
+</div>
+
+<!-- GAME -->
+<div id="screen-game" class="screen">
+  <div class="card">
+    <div class="room-code-pill">Room <span id="gameRoomCode"></span></div>
+    <div class="prefix-display">
+      <div class="prefix-label">Prefix</div>
+      <div class="prefix"><span id="prefixText"></span><span class="dots">…</span></div>
+    </div>
+    <div class="turn-info" id="turnInfo"></div>
+    <div class="timer-wrap">
+      <div id="timerRing" class="timer-ring">
+        <svg viewBox="0 0 100 100">
+          <circle class="bg" cx="50" cy="50" r="44"/>
+          <circle class="fg" cx="50" cy="50" r="44"
+            stroke-dasharray="276.46" stroke-dashoffset="0"/>
+        </svg>
+        <div id="timerNum" class="timer-num">10</div>
+      </div>
+    </div>
+    <div id="yourTurnBanner" class="your-turn-banner">Your turn!</div>
+    <input id="wordInput" type="text" placeholder="Type a word…" maxlength="30" autocomplete="off" autocapitalize="none" spellcheck="false" disabled>
+    <div id="gameLog" class="log"></div>
+    <div class="used-section">
+      <h3>Players</h3>
+      <ul id="gamePlayerList" class="player-list"></ul>
+    </div>
+    <div class="used-section">
+      <h3>Words used (<span id="usedCount">0</span>)</h3>
+      <div id="usedList" class="used-list"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ELIMINATED -->
+<div id="screen-out" class="screen">
+  <div class="card" style="text-align:center;">
+    <div class="center-emoji">💀</div>
+    <h1>You're out</h1>
+    <div id="outReason" class="out-reason"></div>
+    <div id="outWinnerLine" class="out-winner-line"></div>
+    <div id="outRecap"></div>
+    <button id="watchBtn" class="ghost">Keep watching</button>
+    <button id="outBackBtn" class="ghost secondary-row">Back to room</button>
+  </div>
+</div>
+
+<!-- WINNER -->
+<div id="screen-winner" class="screen">
+  <div class="card" style="text-align:center;">
+    <div class="center-emoji">🏆</div>
+    <h1>Winner</h1>
+    <div id="winnerName" class="winner-name"></div>
+    <div id="winnerNote" class="subtitle"></div>
+    <div id="winnerRecap"></div>
+    <button id="playAgainBtn">Back to room</button>
+    <button id="winnerProfileBtn" class="ghost secondary-row">My profile</button>
+  </div>
+</div>
+
+<!-- PROFILE -->
+<div id="screen-profile" class="screen">
+  <div class="card">
+    <div class="profile-header">
+      <div id="pfAvatar" class="avatar">?</div>
+      <div class="pf-meta">
+        <div id="pfName" class="pf-name">Player</div>
+        <div class="pf-sub">
+          <span id="pfLevel" class="pf-level">Level 1</span>
+          <span id="pfTier" class="tier-badge">Bronze</span>
+        </div>
+      </div>
+    </div>
+    <div class="xp-bar"><div id="pfXpFill" class="xp-fill"></div></div>
+    <div id="pfXpText" class="xp-text"></div>
+    <div id="pfStats" class="stat-grid"></div>
+    <div id="pfAchTitle" class="section-title">Achievements</div>
+    <div id="pfAch" class="ach-grid"></div>
+    <button id="pfBackBtn">Back</button>
+    <button id="pfResetBtn" class="ghost secondary-row">Reset profile</button>
+  </div>
+</div>
+
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    });
+  }
+</script>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+(() => {
+  const socket = io();
+  const state = {
+    roomCode: null,
+    playerId: null,
+    isCreator: false,
+    currentPlayerId: null,
+    isMyTurn: false,
+    alive: true,
+    timerInterval: null,
+    timerEnd: 0,
+    lastWord: null,
+    usedWords: [],
+    settings: { turnTimeSec: 30, prefixMode: 'shuffle' },
+    lastRecap: null,
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const screens = ['lobby', 'waiting', 'game', 'out', 'winner', 'profile'];
+  function show(name) {
+    screens.forEach((s) => $('screen-' + s).classList.toggle('active', s === name));
+  }
+  function setErr(elId, msg) {
+    const el = $(elId);
+    if (!msg) {
+      el.classList.remove('show');
+      el.textContent = '';
+    } else {
+      el.classList.add('show');
+      el.textContent = msg;
+    }
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // ---------- Profile (localStorage-backed, cross-session per browser) ----------
+  const PROFILE_KEY = 'wordrace_profile_v1';
+  const ACHIEVEMENTS = [
+    { id: 'first_game',  icon: '🎮', name: 'Welcome',           desc: 'Play your first game' },
+    { id: 'first_win',   icon: '🥇', name: 'First Blood',       desc: 'Win a game' },
+    { id: 'hat_trick',   icon: '🎩', name: 'Hat Trick',         desc: 'Win 3 in a row' },
+    { id: 'unstoppable', icon: '🔥', name: 'Unstoppable',       desc: 'Win 5 in a row' },
+    { id: 'wordsmith',   icon: '✍️', name: 'Wordsmith',         desc: 'Play 100 valid words' },
+    { id: 'novelist',    icon: '📚', name: 'Novelist',          desc: 'Play 500 valid words' },
+    { id: 'big_brain',   icon: '🧠', name: 'Big Brain',         desc: 'Play an 8+ letter word' },
+    { id: 'speed_demon', icon: '⚡', name: 'Speed Demon',       desc: 'Answer in under 2s' },
+    { id: 'marathoner',  icon: '⏱️', name: 'Marathoner',        desc: 'Play 1 hour total' },
+    { id: 'survivor',    icon: '👑', name: 'Last One Standing',  desc: 'Win a game of 4+ players' },
+    { id: 'veteran',     icon: '🎖️', name: 'Veteran',           desc: 'Play 50 games' },
+  ];
+
+  function freshProfile() {
+    return {
+      id: 'p_' + Math.random().toString(36).slice(2) + Date.now().toString(36),
+      username: '', createdAt: Date.now(),
+      gamesPlayed: 0, gamesWon: 0, gamesLost: 0,
+      totalPlayMs: 0, totalValidWords: 0,
+      longestWord: '', fastestMs: null,
+      currentStreak: 0, bestStreak: 0,
+      xp: 0, achievements: {},
+    };
+  }
+  function loadProfile() {
+    try {
+      const raw = localStorage.getItem(PROFILE_KEY);
+      if (raw) return Object.assign(freshProfile(), JSON.parse(raw));
+    } catch (e) {}
+    return freshProfile();
+  }
+  function saveProfile() {
+    try { localStorage.setItem(PROFILE_KEY, JSON.stringify(profile)); } catch (e) {}
+  }
+  let profile = loadProfile();
+
+  const levelFromXp = (xp) => Math.floor((50 + Math.sqrt(2500 + 200 * Math.max(0, xp))) / 100);
+  const xpForLevel = (L) => 50 * (L - 1) * L;
+  function tierForLevel(L) {
+    if (L >= 35) return { name: 'Diamond', color: '#7c5cff' };
+    if (L >= 20) return { name: 'Platinum', color: '#5bc8d6' };
+    if (L >= 10) return { name: 'Gold', color: '#f1c40f' };
+    if (L >= 5)  return { name: 'Silver', color: '#aab2bd' };
+    return { name: 'Bronze', color: '#cd7f32' };
+  }
+  function fmtDuration(ms) {
+    const s = Math.round((ms || 0) / 1000);
+    if (s < 60) return s + 's';
+    const m = Math.floor(s / 60), rs = s % 60;
+    if (m < 60) return rs ? `${m}m ${rs}s` : `${m}m`;
+    const h = Math.floor(m / 60), rm = m % 60;
+    return rm ? `${h}h ${rm}m` : `${h}h`;
+  }
+  function ordinal(n) {
+    const s = ['th', 'st', 'nd', 'rd'], v = n % 100;
+    return n + (s[(v - 20) % 10] || s[v] || s[0]);
+  }
+  function avatarColor(name) {
+    let h = 0;
+    for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
+    return `hsl(${h}, 58%, 46%)`;
+  }
+
+  function evaluateAchievements(result) {
+    const p = profile, newly = [];
+    const cond = {
+      first_game: p.gamesPlayed >= 1,
+      first_win: p.gamesWon >= 1,
+      hat_trick: p.bestStreak >= 3,
+      unstoppable: p.bestStreak >= 5,
+      wordsmith: p.totalValidWords >= 100,
+      novelist: p.totalValidWords >= 500,
+      big_brain: (p.longestWord || '').length >= 8,
+      speed_demon: p.fastestMs != null && p.fastestMs <= 2000,
+      marathoner: p.totalPlayMs >= 3600000,
+      survivor: !!(result && result.won && result.totalPlayers >= 4),
+      veteran: p.gamesPlayed >= 50,
+    };
+    ACHIEVEMENTS.forEach((a) => {
+      if (cond[a.id] && !p.achievements[a.id]) { p.achievements[a.id] = Date.now(); newly.push(a); }
+    });
+    return newly;
+  }
+
+  function applyGameResult(result) {
+    const beforeLevel = levelFromXp(profile.xp);
+    profile.gamesPlayed += 1;
+    if (result.won) { profile.gamesWon += 1; profile.currentStreak += 1; }
+    else { profile.gamesLost += 1; profile.currentStreak = 0; }
+    profile.bestStreak = Math.max(profile.bestStreak, profile.currentStreak);
+    profile.totalPlayMs += Math.max(0, result.survivedMs || 0);
+    profile.totalValidWords += result.validWords || 0;
+    if ((result.longestWord || '').length > (profile.longestWord || '').length) profile.longestWord = result.longestWord;
+    if (result.fastestMs != null && (profile.fastestMs == null || result.fastestMs < profile.fastestMs)) profile.fastestMs = result.fastestMs;
+
+    let gained = 15;
+    if (result.won) gained += 60;
+    gained += (result.validWords || 0) * 3;
+    gained += Math.max(0, (result.totalPlayers || 1) - (result.placement || 1)) * 5;
+    gained += Math.min((result.longestWord || '').length, 12) * 2;
+    profile.xp += gained;
+
+    const newAchievements = evaluateAchievements(result);
+    const newLevel = levelFromXp(profile.xp);
+    saveProfile();
+    return { gained, leveledUp: newLevel > beforeLevel, newLevel, newAchievements, result };
+  }
+
+  function renderProfile() {
+    const p = profile;
+    const level = levelFromXp(p.xp);
+    const tier = tierForLevel(level);
+    const curBase = xpForLevel(level), nextBase = xpForLevel(level + 1);
+    const into = p.xp - curBase, span = Math.max(1, nextBase - curBase);
+    const pct = Math.max(0, Math.min(100, Math.round((into / span) * 100)));
+    const name = p.username || 'Player';
+    const av = $('pfAvatar');
+    av.textContent = (name[0] || '?').toUpperCase();
+    av.style.background = avatarColor(name);
+    $('pfName').textContent = name;
+    $('pfLevel').textContent = 'Level ' + level;
+    const tb = $('pfTier');
+    tb.textContent = tier.name;
+    tb.style.color = tier.color;
+    $('pfXpFill').style.width = pct + '%';
+    $('pfXpText').textContent = `${into} / ${span} XP · ${Math.max(0, nextBase - p.xp)} XP to Level ${level + 1}`;
+
+    const winRate = p.gamesPlayed ? Math.round((p.gamesWon / p.gamesPlayed) * 100) : 0;
+    const stats = [
+      ['Games', p.gamesPlayed],
+      ['Win rate', winRate + '%'],
+      ['Wins', p.gamesWon],
+      ['Losses', p.gamesLost],
+      ['Time played', fmtDuration(p.totalPlayMs)],
+      ['Words played', p.totalValidWords],
+      ['Longest word', p.longestWord || '—'],
+      ['Fastest answer', p.fastestMs != null ? (p.fastestMs / 1000).toFixed(1) + 's' : '—'],
+      ['Current streak', p.currentStreak ? p.currentStreak + ' 🔥' : '0'],
+      ['Best streak', p.bestStreak],
+    ];
+    $('pfStats').innerHTML = stats.map(([k, v]) =>
+      `<div class="stat-card"><div class="stat-val">${escapeHtml(String(v))}</div><div class="stat-key">${escapeHtml(k)}</div></div>`
+    ).join('');
+
+    const unlocked = Object.keys(p.achievements).length;
+    $('pfAchTitle').textContent = `Achievements (${unlocked}/${ACHIEVEMENTS.length})`;
+    $('pfAch').innerHTML = ACHIEVEMENTS.map((a) => {
+      const on = !!p.achievements[a.id];
+      return `<div class="ach ${on ? 'on' : 'off'}">
+        <div class="ach-icon">${a.icon}</div>
+        <div class="ach-name">${escapeHtml(a.name)}</div>
+        <div class="ach-desc">${escapeHtml(a.desc)}</div>
+      </div>`;
+    }).join('');
+  }
+
+  function renderRecap(recap) {
+    if (!recap) { $('winnerRecap').innerHTML = ''; $('outRecap').innerHTML = ''; return; }
+    const r = recap.result;
+    const rows = [
+      ['Placement', `${ordinal(r.placement)} of ${r.totalPlayers}`],
+      ['Survived', fmtDuration(r.survivedMs)],
+      ['Words played', r.validWords],
+      ['Longest', r.longestWord || '—'],
+      ['Fastest', r.fastestMs != null ? (r.fastestMs / 1000).toFixed(1) + 's' : '—'],
+    ];
+    let html = `<div class="recap"><div class="recap-grid">` +
+      rows.map(([k, v]) => `<div class="recap-row"><span>${escapeHtml(k)}</span><strong>${escapeHtml(String(v))}</strong></div>`).join('') +
+      `</div><div class="xp-gain">+${recap.gained} XP` +
+      (recap.leveledUp ? ` · <span class="levelup">LEVEL UP → Lv ${recap.newLevel}!</span>` : '') + `</div>`;
+    if (recap.newAchievements.length) {
+      html += `<div class="recap-ach">` +
+        recap.newAchievements.map((a) => `<span class="ach-pill">${a.icon} ${escapeHtml(a.name)}</span>`).join('') +
+        `</div>`;
+    }
+    html += `</div>`;
+    $('winnerRecap').innerHTML = html;
+    $('outRecap').innerHTML = html;
+  }
+
+  // --- Lobby ---
+  $('joinBtn').addEventListener('click', joinRoom);
+  $('usernameInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('roomInput').focus(); });
+  $('roomInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') joinRoom(); });
+  $('roomInput').addEventListener('input', (e) => {
+    e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  });
+
+  // Prefill the remembered username so stats follow the same player.
+  if (profile.username) $('usernameInput').value = profile.username;
+
+  $('profileBtn').addEventListener('click', () => { renderProfile(); show('profile'); });
+  $('pfBackBtn').addEventListener('click', () => show('lobby'));
+  $('winnerProfileBtn').addEventListener('click', () => { renderProfile(); show('profile'); });
+  $('outBackBtn').addEventListener('click', () => { show('waiting'); setErr('waitingErr', ''); });
+  $('pfResetBtn').addEventListener('click', () => {
+    if (!confirm('Reset your profile? This clears all stats, XP and achievements on this device.')) return;
+    const u = profile.username;
+    profile = freshProfile();
+    profile.username = u;
+    saveProfile();
+    renderProfile();
+  });
+
+  function joinRoom() {
+    setErr('lobbyErr', '');
+    const username = $('usernameInput').value.trim();
+    const roomCode = $('roomInput').value.trim().toUpperCase();
+    if (!username) { setErr('lobbyErr', 'Enter a username.'); return; }
+    if (!roomCode) { setErr('lobbyErr', 'Enter a room code.'); return; }
+    if (username !== profile.username) { profile.username = username; saveProfile(); }
+    socket.emit('join-room', { username, roomCode });
+  }
+
+  // --- Waiting room ---
+  $('startBtn').addEventListener('click', () => {
+    setErr('waitingErr', '');
+    socket.emit('start-game');
+  });
+  $('leaveBtn1').addEventListener('click', () => {
+    socket.emit('leave-room');
+    resetToLobby();
+  });
+
+  function pushSettings(patch) {
+    if (!state.isCreator) return;
+    socket.emit('update-settings', {
+      turnTimeSec: state.settings.turnTimeSec,
+      prefixMode: state.settings.prefixMode,
+      ...patch,
+    });
+  }
+  document.querySelectorAll('#timeSeg button').forEach((btn) => {
+    btn.addEventListener('click', () => pushSettings({ turnTimeSec: Number(btn.dataset.time) }));
+  });
+  document.querySelectorAll('#prefixSeg button').forEach((btn) => {
+    btn.addEventListener('click', () => pushSettings({ prefixMode: btn.dataset.mode }));
+  });
+
+  function renderSettings(settings, isHost) {
+    state.settings = settings;
+    document.querySelectorAll('#timeSeg button').forEach((b) => {
+      b.classList.toggle('selected', Number(b.dataset.time) === settings.turnTimeSec);
+      b.disabled = !isHost;
+    });
+    document.querySelectorAll('#prefixSeg button').forEach((b) => {
+      b.classList.toggle('selected', b.dataset.mode === settings.prefixMode);
+      b.disabled = !isHost;
+    });
+    const modeText = settings.prefixMode === 'same'
+      ? 'Same prefix: every player answers the same prefix for the whole game.'
+      : 'Shuffle: a fresh random prefix after every valid word.';
+    $('settingHint').textContent = isHost
+      ? modeText
+      : `${settings.turnTimeSec}s per turn · ${modeText} (only the host can change settings)`;
+  }
+
+  function renderPlayerList(listEl, players, opts = {}) {
+    listEl.innerHTML = '';
+    players.forEach((p) => {
+      const li = document.createElement('li');
+      if (!p.alive) li.classList.add('dead');
+      if (opts.currentPlayerId && p.id === opts.currentPlayerId && p.alive) li.classList.add('current');
+      const left = document.createElement('span');
+      left.textContent = p.username;
+      const right = document.createElement('span');
+      const badges = [];
+      if (p.id === state.playerId) badges.push('<span class="badge you">you</span>');
+      if (opts.creatorId && p.id === opts.creatorId) badges.push('<span class="badge host">host</span>');
+      if (!p.alive) badges.push('<span class="badge">out</span>');
+      right.innerHTML = badges.join(' ');
+      li.appendChild(left);
+      li.appendChild(right);
+      listEl.appendChild(li);
+    });
+  }
+
+  // --- Game ---
+  $('wordInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const w = $('wordInput').value.trim();
+      if (!w || !state.isMyTurn) return;
+      socket.emit('submit-word', { word: w });
+      $('wordInput').value = '';
+      $('wordInput').disabled = true;
+    }
+  });
+
+  function startTimerAnimation(durationMs) {
+    stopTimerAnimation();
+    state.timerEnd = Date.now() + durationMs;
+    const ring = $('timerRing');
+    const num = $('timerNum');
+    const fg = ring.querySelector('circle.fg');
+    const circumference = 276.46;
+
+    function tick() {
+      const remaining = Math.max(0, state.timerEnd - Date.now());
+      const sec = Math.ceil(remaining / 1000);
+      num.textContent = sec;
+      const pct = remaining / durationMs;
+      fg.setAttribute('stroke-dashoffset', String(circumference * (1 - pct)));
+      ring.classList.toggle('danger', remaining <= 5000);
+      ring.classList.toggle('warn', remaining > 5000 && pct <= 0.5);
+      if (remaining <= 0) stopTimerAnimation();
+    }
+    tick();
+    state.timerInterval = setInterval(tick, 80);
+  }
+  function stopTimerAnimation() {
+    if (state.timerInterval) { clearInterval(state.timerInterval); state.timerInterval = null; }
+  }
+
+  function renderUsedWords() {
+    const el = $('usedList');
+    el.innerHTML = '';
+    $('usedCount').textContent = state.usedWords.length;
+    if (state.usedWords.length === 0) {
+      const empty = document.createElement('span');
+      empty.className = 'pill';
+      empty.style.opacity = '0.6';
+      empty.textContent = 'none yet';
+      el.appendChild(empty);
+      return;
+    }
+    state.usedWords.slice().reverse().forEach((w) => {
+      const span = document.createElement('span');
+      span.className = 'pill' + (w === state.lastWord ? ' new' : '');
+      span.textContent = w;
+      el.appendChild(span);
+    });
+  }
+
+  // --- Eliminated / Winner ---
+  $('watchBtn').addEventListener('click', () => {
+    show('game');
+  });
+  $('playAgainBtn').addEventListener('click', () => {
+    show('waiting');
+    setErr('waitingErr', '');
+  });
+
+  function resetToLobby() {
+    stopTimerAnimation();
+    state.roomCode = null;
+    state.playerId = null;
+    state.isCreator = false;
+    state.isMyTurn = false;
+    state.alive = true;
+    show('lobby');
+  }
+
+  // --- Socket events ---
+  socket.on('connect', () => {});
+  socket.on('disconnect', () => {
+    setErr('lobbyErr', 'Disconnected from server.');
+    resetToLobby();
+  });
+  socket.on('error-msg', ({ message }) => {
+    const active = document.querySelector('.screen.active').id;
+    if (active === 'screen-lobby') setErr('lobbyErr', message);
+    else if (active === 'screen-waiting') setErr('waitingErr', message);
+    else $('gameLog').textContent = message;
+  });
+  socket.on('joined', ({ roomCode, playerId, isCreator }) => {
+    state.roomCode = roomCode;
+    state.playerId = playerId;
+    state.isCreator = isCreator;
+    state.alive = true;
+    $('roomCodeText').textContent = roomCode;
+    $('gameRoomCode').textContent = roomCode;
+    show('waiting');
+  });
+  socket.on('room-update', ({ players, creatorId, started, settings }) => {
+    state.isCreator = creatorId === state.playerId;
+    if (settings) renderSettings(settings, state.isCreator);
+    renderPlayerList($('playerList'), players, { creatorId });
+    const canStart = state.isCreator && players.length >= 2 && !started;
+    $('startBtn').disabled = !canStart;
+    $('startBtn').textContent = state.isCreator
+      ? (players.length < 2 ? 'Waiting for more players…' : 'Start game')
+      : 'Waiting for host to start…';
+    $('waitingMsg').textContent = state.isCreator
+      ? 'Share the room code with friends and start when ready.'
+      : 'Waiting for the host to start the game.';
+  });
+  socket.on('game-started', () => {
+    state.alive = true;
+    state.usedWords = [];
+    state.lastWord = null;
+    state.lastRecap = null;
+    renderUsedWords();
+    renderRecap(null);
+    $('outWinnerLine').innerHTML = '';
+    setErr('waitingErr', '');
+    $('gameLog').textContent = '';
+    $('gameLog').className = 'log';
+    show('game');
+  });
+  socket.on('turn-update', ({ prefix, currentPlayerId, currentPlayerName, timeLeftMs, usedWords, players }) => {
+    state.currentPlayerId = currentPlayerId;
+    state.isMyTurn = currentPlayerId === state.playerId && state.alive;
+    $('prefixText').textContent = prefix;
+    $('turnInfo').innerHTML = state.isMyTurn
+      ? '<strong>Your turn</strong>'
+      : `<strong>${escapeHtml(currentPlayerName)}</strong>'s turn`;
+    renderPlayerList($('gamePlayerList'), players, { currentPlayerId });
+    state.usedWords = usedWords;
+    renderUsedWords();
+    $('yourTurnBanner').classList.toggle('show', state.isMyTurn);
+    const input = $('wordInput');
+    input.disabled = !state.isMyTurn;
+    input.value = '';
+    if (state.isMyTurn) {
+      $('gameLog').textContent = '';
+      $('gameLog').className = 'log';
+      setTimeout(() => input.focus(), 50);
+    }
+    startTimerAnimation(timeLeftMs);
+  });
+  socket.on('word-accepted', ({ word, playerId, username }) => {
+    state.lastWord = word;
+    if (!state.usedWords.includes(word)) state.usedWords.push(word);
+    renderUsedWords();
+    const log = $('gameLog');
+    log.className = 'log good';
+    log.textContent = `✓ ${username} → "${word}"`;
+  });
+  socket.on('player-eliminated', ({ playerId, username, reason, players }) => {
+    if (players) renderPlayerList($('gamePlayerList'), players, { currentPlayerId: state.currentPlayerId });
+    if (playerId !== state.playerId) {
+      const log = $('gameLog');
+      log.className = 'log bad';
+      log.textContent = `✗ ${username} is out — ${reason}`;
+    }
+  });
+  socket.on('you-eliminated', ({ reason }) => {
+    state.alive = false;
+    state.isMyTurn = false;
+    stopTimerAnimation();
+    $('outReason').textContent = reason;
+    show('out');
+  });
+  socket.on('game-result', (result) => {
+    state.lastRecap = applyGameResult(result);
+    renderRecap(state.lastRecap);
+  });
+  socket.on('winner', ({ winnerId, winnerName, wordsUsed }) => {
+    stopTimerAnimation();
+    state.isMyTurn = false;
+    const iWon = !!winnerId && winnerId === state.playerId;
+    $('winnerName').textContent = winnerName || 'Nobody';
+    $('winnerNote').textContent = wordsUsed && wordsUsed.length
+      ? `${wordsUsed.length} word${wordsUsed.length === 1 ? '' : 's'} played this game.`
+      : '';
+    if (iWon || state.alive) {
+      show('winner');
+    } else {
+      $('outWinnerLine').innerHTML = winnerName ? `🏆 <strong>${escapeHtml(winnerName)}</strong> won` : 'Game over';
+      show('out');
+    }
+  });
+})();
+</script>
+</body>
+</html>
