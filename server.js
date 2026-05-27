@@ -102,6 +102,11 @@ const PREFIX_MODES = ['shuffle', 'same'];
 const NEXT_TURN_DELAY_MS = 1200;
 const MAX_PLAYERS = 12;
 const LOBBY = 'lobby';
+const GAME_MODES = ['survival', 'scored'];
+const SCORED_START = 20;       // points each player starts with in Scored mode
+const WRONG_PENALTY = 7;       // points lost for an invalid / duplicate word
+const TIMEOUT_PENALTY = 5;     // points lost for running out of time
+const CORRECT_MIN_POINTS = 3;  // floor for a correct-word award (otherwise = word length)
 
 const rooms = Object.create(null);
 
@@ -119,7 +124,7 @@ function genCode() {
   return code;
 }
 
-function makeRoom(socketId, { name, isPublic, turnTimeSec, prefixMode }) {
+function makeRoom(socketId, { name, isPublic, turnTimeSec, prefixMode, mode }) {
   const code = genCode();
   rooms[code] = {
     code,
@@ -136,6 +141,7 @@ function makeRoom(socketId, { name, isPublic, turnTimeSec, prefixMode }) {
     settings: {
       turnTimeMs: ALLOWED_TURN_TIMES.includes(Number(turnTimeSec)) ? Number(turnTimeSec) * 1000 : DEFAULT_TURN_TIME_MS,
       prefixMode: PREFIX_MODES.includes(prefixMode) ? prefixMode : 'shuffle',
+      mode: GAME_MODES.includes(mode) ? mode : 'survival',
     },
   };
   return rooms[code];
@@ -155,13 +161,15 @@ function alivePlayers(room) {
 }
 
 function publicPlayers(room) {
-  return room.players.map((p) => ({ id: p.id, username: p.username, alive: p.alive }));
+  const scored = room.settings.mode === 'scored';
+  return room.players.map((p) => ({ id: p.id, username: p.username, alive: p.alive, score: scored ? (p.score == null ? 0 : p.score) : null }));
 }
 
 function publicSettings(room) {
   return {
     turnTimeSec: Math.round(room.settings.turnTimeMs / 1000),
     prefixMode: room.settings.prefixMode,
+    mode: room.settings.mode,
   };
 }
 
@@ -275,11 +283,13 @@ function startTurn(roomCode) {
     timeLeftMs: room.settings.turnTimeMs,
     usedWords: Array.from(room.usedWords),
     players: publicPlayers(room),
+    mode: room.settings.mode,
   });
 
   clearRoomTimer(room);
   room.timer = setTimeout(() => {
-    eliminatePlayer(roomCode, current.id, 'Time ran out');
+    if (room.settings.mode === 'scored') scoredMistake(roomCode, current, 'Ran out of time', TIMEOUT_PENALTY);
+    else eliminatePlayer(roomCode, current.id, 'Time ran out');
   }, room.settings.turnTimeMs);
 }
 
@@ -310,6 +320,29 @@ function eliminatePlayer(roomCode, playerId, reason) {
 
   advanceTurnIndex(room);
   setTimeout(() => startTurn(roomCode), NEXT_TURN_DELAY_MS);
+}
+
+// Scored mode: a wrong/duplicate word or timeout deducts points instead of
+// eliminating. Hitting 0 knocks the player out. The turn then passes on.
+function scoredMistake(roomCode, player, reason, penalty) {
+  const room = rooms[roomCode];
+  if (!room || !player || !player.alive) return;
+  clearRoomTimer(room);
+  player.score = (player.score == null ? SCORED_START : player.score) - penalty;
+  io.to(roomCode).emit('word-rejected', {
+    playerId: player.id,
+    username: player.username,
+    reason,
+    points: -penalty,
+    score: player.score,
+    players: publicPlayers(room),
+  });
+  if (player.score <= 0) {
+    eliminatePlayer(roomCode, player.id, reason + ' — knocked out at 0');
+    return;
+  }
+  advanceTurnIndex(room);
+  setTimeout(() => startTurn(roomCode), 900);
 }
 
 function endGame(roomCode) {
@@ -398,6 +431,7 @@ io.on('connection', (socket) => {
       isPublic: raw ? raw.isPublic : true,
       turnTimeSec: raw ? raw.turnTimeSec : undefined,
       prefixMode: raw ? raw.prefixMode : undefined,
+      mode: raw ? raw.mode : undefined,
     });
     joinRoomInternal(socket, room, username);
   });
@@ -455,6 +489,9 @@ io.on('connection', (socket) => {
     if (PREFIX_MODES.includes(prefixMode)) {
       room.settings.prefixMode = prefixMode;
     }
+    if (raw && GAME_MODES.includes(raw.mode)) {
+      room.settings.mode = raw.mode;
+    }
     if (raw && typeof raw.isPublic === 'boolean') room.isPublic = raw.isPublic;
     broadcastRoom(roomCode);
     broadcastLobby();
@@ -480,6 +517,7 @@ io.on('connection', (socket) => {
     room.players.forEach((p) => {
       p.alive = true;
       p.stats = { validWords: 0, longestWord: '', fastestMs: null };
+      p.score = SCORED_START;
     });
     room.usedWords = new Set();
     room.currentTurnIndex = Math.floor(Math.random() * room.players.length);
@@ -497,27 +535,18 @@ io.on('connection', (socket) => {
     const current = room.players[room.currentTurnIndex];
     if (!current || current.id !== socket.id || !current.alive) return;
 
+    const scored = room.settings.mode === 'scored';
+    const reject = (reason) => {
+      if (scored) scoredMistake(roomCode, current, reason, WRONG_PENALTY);
+      else eliminatePlayer(roomCode, socket.id, reason);
+    };
+
     const word = (raw && typeof raw.word === 'string' ? raw.word : '').trim().toLowerCase();
-    if (!word) {
-      eliminatePlayer(roomCode, socket.id, 'Submitted an empty word');
-      return;
-    }
-    if (!/^[a-z]+$/.test(word)) {
-      eliminatePlayer(roomCode, socket.id, `"${word}" contains non-letters`);
-      return;
-    }
-    if (!word.startsWith(room.currentPrefix)) {
-      eliminatePlayer(roomCode, socket.id, `"${word}" doesn't start with "${room.currentPrefix}"`);
-      return;
-    }
-    if (room.usedWords.has(word)) {
-      eliminatePlayer(roomCode, socket.id, `"${word}" was already used`);
-      return;
-    }
-    if (!words.has(word)) {
-      eliminatePlayer(roomCode, socket.id, `"${word}" is not a valid English word`);
-      return;
-    }
+    if (!word) return reject('Submitted an empty word');
+    if (!/^[a-z]+$/.test(word)) return reject(`"${word}" contains non-letters`);
+    if (!word.startsWith(room.currentPrefix)) return reject(`"${word}" doesn't start with "${room.currentPrefix}"`);
+    if (room.usedWords.has(word)) return reject(`"${word}" was already used`);
+    if (!words.has(word)) return reject(`"${word}" is not a valid English word`);
 
     clearRoomTimer(room);
     room.usedWords.add(word);
@@ -529,10 +558,18 @@ io.on('connection', (socket) => {
         current.stats.fastestMs = responseMs;
       }
     }
+    let points = null;
+    if (scored) {
+      points = Math.max(CORRECT_MIN_POINTS, word.length);
+      current.score = (current.score == null ? SCORED_START : current.score) + points;
+    }
     io.to(roomCode).emit('word-accepted', {
       word,
       playerId: socket.id,
       username: current.username,
+      points,
+      score: scored ? current.score : null,
+      players: publicPlayers(room),
     });
 
     if (room.settings.prefixMode === 'shuffle') {
