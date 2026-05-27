@@ -138,6 +138,12 @@
   .status-chip.full { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); }
   .rooms-empty { text-align: center; color: var(--muted); font-size: 14px; padding: 22px 10px; background: var(--surface-2); border: 1px dashed var(--border); border-radius: 14px; }
 
+  /* Invite screen */
+  .invite-hero { font-size: 24px; font-weight: 800; text-align: center; margin: 4px 0 6px; }
+  .invite-info { text-align: center; color: var(--muted); font-size: 15px; margin-bottom: 18px; }
+  .invite-info .room-name { color: var(--text); font-weight: 700; }
+  .invite-info .pcount { color: var(--brand-ink); font-weight: 700; }
+
   /* Room header pills */
   .room-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
   .room-code-pill {
@@ -221,6 +227,9 @@
   .xp-bar { height: 10px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; overflow: hidden; margin-bottom: 6px; }
   .xp-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--brand), var(--brand-2)); transition: width 0.6s ease; }
   .xp-text { font-size: 12px; color: var(--muted); margin-bottom: 20px; }
+  .pf-sync { font-size: 12px; font-weight: 600; margin: -14px 0 18px; }
+  .pf-sync.synced { color: var(--good); }
+  .pf-sync.local { color: var(--muted); }
   .stat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 22px; }
   .stat-card { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
   .stat-val { font-size: 20px; font-weight: 800; }
@@ -359,6 +368,25 @@
   </div>
 </div>
 
+<!-- INVITE (arriving via a shared link) -->
+<div id="screen-invite" class="screen">
+  <div class="card">
+    <div class="brand">
+      <div class="brand-badge">W</div>
+      <div><div class="brand-title">Word <span class="accent">Race</span></div></div>
+    </div>
+    <div class="invite-hero">🎉 You're invited!</div>
+    <div id="inviteRoomInfo" class="invite-info"></div>
+    <div id="inviteErr" class="err"></div>
+    <div class="field">
+      <label for="inviteName">Your name</label>
+      <input id="inviteName" type="text" placeholder="Your name" maxlength="20" autocomplete="off">
+    </div>
+    <button id="inviteJoinBtn">Join room</button>
+    <button id="inviteHomeBtn" class="ghost secondary-row">Back to home</button>
+  </div>
+</div>
+
 <!-- WAITING ROOM -->
 <div id="screen-waiting" class="screen">
   <div class="card">
@@ -368,6 +396,7 @@
     </div>
     <h1 id="roomNameText">Waiting room</h1>
     <div class="subtitle"><span id="waitingMsg">Share the room code with friends and start when ready.</span></div>
+    <button id="inviteShareBtn" class="soft" style="margin-bottom:16px;">🔗 Invite friends</button>
     <div id="waitingErr" class="err"></div>
 
     <div class="settings">
@@ -469,6 +498,7 @@
     </div>
     <div class="xp-bar"><div id="pfXpFill" class="xp-fill"></div></div>
     <div id="pfXpText" class="xp-text"></div>
+    <div id="pfSync" class="pf-sync"></div>
     <div id="pfStats" class="stat-grid"></div>
     <div id="pfAchTitle" class="section-title">Achievements</div>
     <div id="pfAch" class="ach-grid"></div>
@@ -495,11 +525,13 @@
     settings: { turnTimeSec: 30, prefixMode: 'shuffle' }, lastRecap: null,
   };
   let auth = { authenticated: false, user: null, providers: { google: false, facebook: false } };
+  let dbBackend = null;
   const createOpts = { isPublic: true, turnTimeSec: 30, prefixMode: 'shuffle' };
   let lobbyRooms = [], lobbyAt = 0, lobbyTick = null;
 
   const $ = (id) => document.getElementById(id);
-  const screens = ['home', 'create', 'join', 'waiting', 'game', 'out', 'winner', 'profile'];
+  const screens = ['home', 'create', 'join', 'invite', 'waiting', 'game', 'out', 'winner', 'profile'];
+  let pendingInvite = null;
   function show(name) {
     screens.forEach((s) => $('screen-' + s).classList.toggle('active', s === name));
     if (name === 'home') { socket.emit('enter-lobby'); startLobbyTick(); }
@@ -604,6 +636,9 @@
     const tb = $('pfTier'); tb.textContent = tier.name; tb.style.color = tier.color;
     $('pfXpFill').style.width = pct + '%';
     $('pfXpText').textContent = `${into} / ${span} XP · ${Math.max(0, nextBase - p.xp)} XP to Level ${level + 1}`;
+    const sync = $('pfSync');
+    if (auth.authenticated) { sync.textContent = '✓ Synced to your account'; sync.className = 'pf-sync synced'; }
+    else { sync.textContent = 'Saved on this device · sign in to sync across devices'; sync.className = 'pf-sync local'; }
     const winRate = p.gamesPlayed ? Math.round((p.gamesWon / p.gamesPlayed) * 100) : 0;
     const stats = [
       ['Games', p.gamesPlayed], ['Win rate', winRate + '%'], ['Wins', p.gamesWon], ['Losses', p.gamesLost],
@@ -633,6 +668,41 @@
     if (recap.newAchievements.length) html += `<div class="recap-ach">` + recap.newAchievements.map((a) => `<span class="ach-pill">${a.icon} ${escapeHtml(a.name)}</span>`).join('') + `</div>`;
     html += `</div>`;
     $('winnerRecap').innerHTML = html; $('outRecap').innerHTML = html;
+  }
+
+  // ---------- Cross-device sync (server-backed accounts) ----------
+  function betterProfile(a, b) {
+    if (!b) return a;
+    return Object.assign({}, a, {
+      gamesPlayed: Math.max(a.gamesPlayed || 0, b.gamesPlayed || 0),
+      gamesWon: Math.max(a.gamesWon || 0, b.gamesWon || 0),
+      gamesLost: Math.max(a.gamesLost || 0, b.gamesLost || 0),
+      totalPlayMs: Math.max(a.totalPlayMs || 0, b.totalPlayMs || 0),
+      totalValidWords: Math.max(a.totalValidWords || 0, b.totalValidWords || 0),
+      longestWord: (a.longestWord || '').length >= (b.longestWord || '').length ? a.longestWord : b.longestWord,
+      fastestMs: a.fastestMs == null ? b.fastestMs : (b.fastestMs == null ? a.fastestMs : Math.min(a.fastestMs, b.fastestMs)),
+      currentStreak: Math.max(a.currentStreak || 0, b.currentStreak || 0),
+      bestStreak: Math.max(a.bestStreak || 0, b.bestStreak || 0),
+      xp: Math.max(a.xp || 0, b.xp || 0),
+      achievements: Object.assign({}, b.achievements || {}, a.achievements || {}),
+      username: a.username || b.username || '',
+      id: a.id, createdAt: a.createdAt || b.createdAt,
+    });
+  }
+  function pushProfile(replace) {
+    try {
+      fetch('/api/profile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ guestId: profile.id, profile, replace: !!replace }) });
+    } catch (e) {}
+  }
+  async function syncProfile() {
+    try {
+      const r = await fetch('/api/profile?guestId=' + encodeURIComponent(profile.id));
+      const data = await r.json();
+      dbBackend = data.backend || null;
+      if (data.profile) { profile = betterProfile(profile, data.profile); saveProfile(); }
+      pushProfile(); // converge both sides
+    } catch (e) {}
+    renderIdentity();
   }
 
   // ---------- Identity / auth ----------
@@ -742,6 +812,55 @@
   });
   $('joinBack').addEventListener('click', () => show('home'));
 
+  // ---------- Invite links ----------
+  function inviteLinkFor(code) { return location.origin + '/?room=' + code; }
+  $('inviteShareBtn').addEventListener('click', async () => {
+    const link = inviteLinkFor(state.roomCode);
+    if (navigator.share) {
+      try { await navigator.share({ title: 'Word Race', text: 'Join my Word Race game!', url: link }); return; } catch (e) { if (e && e.name === 'AbortError') return; }
+    }
+    try { await navigator.clipboard.writeText(link); toast('Invite link copied!'); }
+    catch (e) { toast(link); }
+  });
+  function startInvite(code) {
+    pendingInvite = code;
+    setErr('inviteErr', '');
+    $('inviteName').value = playerName() || '';
+    $('inviteRoomInfo').innerHTML = 'Joining room <strong>' + escapeHtml(code) + '</strong>…';
+    $('inviteJoinBtn').disabled = false;
+    show('invite');
+    socket.emit('peek-room', { code });
+    setTimeout(() => $('inviteName').focus(), 120);
+  }
+  socket.on('room-peek', (info) => {
+    if (!pendingInvite || info.code !== pendingInvite) return;
+    const el = $('inviteRoomInfo'), btn = $('inviteJoinBtn');
+    if (!info.exists) {
+      el.innerHTML = 'That room <strong>' + escapeHtml(info.code) + '</strong> isn’t available anymore.';
+      btn.disabled = true; return;
+    }
+    if (info.status === 'playing') {
+      el.innerHTML = '<span class="room-name">' + escapeHtml(info.name) + '</span><br>Game already in progress — ask for a fresh invite next round.';
+      btn.disabled = true; return;
+    }
+    if (info.full) {
+      el.innerHTML = '<span class="room-name">' + escapeHtml(info.name) + '</span><br>This room is full.';
+      btn.disabled = true; return;
+    }
+    el.innerHTML = '<span class="room-name">' + escapeHtml(info.name) + '</span><br><span class="pcount">' + info.players + '/' + info.max + '</span> players · waiting to start';
+    btn.disabled = false;
+  });
+  $('inviteName').addEventListener('input', () => { const n = $('inviteName').value.trim(); profile.username = n; saveProfile(); });
+  $('inviteName').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('inviteJoinBtn').click(); });
+  $('inviteJoinBtn').addEventListener('click', () => {
+    setErr('inviteErr', '');
+    const name = $('inviteName').value.trim();
+    if (!name) { setErr('inviteErr', 'Enter your name to join.'); $('inviteName').focus(); return; }
+    if (!(auth.authenticated && auth.user) && name !== profile.username) { profile.username = name; saveProfile(); }
+    socket.emit('join-room', { username: name, roomCode: pendingInvite });
+  });
+  $('inviteHomeBtn').addEventListener('click', () => { pendingInvite = null; goHome(); });
+
   // ---------- Waiting room ----------
   $('startBtn').addEventListener('click', () => { setErr('waitingErr', ''); socket.emit('start-game'); });
   $('leaveBtn1').addEventListener('click', () => { socket.emit('leave-room'); goHome(); });
@@ -815,8 +934,10 @@
   $('outBackBtn').addEventListener('click', () => { show('waiting'); setErr('waitingErr', ''); });
   $('pfBackBtn').addEventListener('click', () => show('home'));
   $('pfResetBtn').addEventListener('click', () => {
-    if (!confirm('Reset your profile? This clears all stats, XP and achievements on this device.')) return;
-    const u = profile.username; profile = freshProfile(); profile.username = u; saveProfile(); renderProfile();
+    if (!confirm('Reset your profile? This clears all stats, XP and achievements.')) return;
+    const u = profile.username, id = profile.id;
+    profile = freshProfile(); profile.id = id; profile.username = u;
+    saveProfile(); pushProfile(true); renderProfile();
   });
   function goHome() {
     stopTimerAnimation();
@@ -825,7 +946,7 @@
   }
 
   // ---------- Socket events ----------
-  socket.on('connect', () => { socket.emit('enter-lobby'); });
+  socket.on('connect', () => { const a = document.querySelector('.screen.active'); if (a && a.id === 'screen-home') socket.emit('enter-lobby'); });
   socket.on('disconnect', () => { toast('Disconnected from server.'); goHome(); });
   socket.on('error-msg', ({ message }) => {
     const active = document.querySelector('.screen.active').id;
@@ -889,7 +1010,7 @@
     $('outReason').textContent = reason;
     screens.forEach((s) => $('screen-' + s).classList.toggle('active', s === 'out')); stopLobbyTick();
   });
-  socket.on('game-result', (result) => { state.lastRecap = applyGameResult(result); renderRecap(state.lastRecap); });
+  socket.on('game-result', (result) => { state.lastRecap = applyGameResult(result); renderRecap(state.lastRecap); pushProfile(); });
   socket.on('winner', ({ winnerId, winnerName, wordsUsed }) => {
     stopTimerAnimation(); state.isMyTurn = false;
     const iWon = !!winnerId && winnerId === state.playerId;
@@ -904,9 +1025,11 @@
   const params = new URLSearchParams(location.search);
   if (params.get('auth') === 'ok') toast('Signed in!');
   else if (params.get('auth') === 'failed') toast('Sign-in failed. You can still play as guest.');
-  if (params.has('auth')) history.replaceState({}, '', location.pathname);
-  loadAuth();
-  show('home');
+  const inviteCode = (params.get('room') || '').trim().toUpperCase();
+  if (params.has('auth') || params.has('room')) history.replaceState({}, '', location.pathname);
+  loadAuth().then(syncProfile);
+  if (inviteCode && /^[A-Z0-9]{1,10}$/.test(inviteCode)) startInvite(inviteCode);
+  else show('home');
 })();
 </script>
 </body>

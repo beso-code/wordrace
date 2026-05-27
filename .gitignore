@@ -1,6 +1,7 @@
 node_modules/
 .toolchain/
 .claude/
+data/
 npm-debug.log*
 .DS_Store
 *.log

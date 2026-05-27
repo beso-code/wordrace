@@ -4,13 +4,77 @@ const path = require('path');
 const fs = require('fs');
 const { Server } = require('socket.io');
 const { setupAuth } = require('./auth');
+const store = require('./db');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
+app.use(express.json({ limit: '64kb' }));
+
 // Auth scaffold (Google/Facebook) — guest-only until credentials are provided as env vars.
 setupAuth(app);
+
+// ---------- Account profile persistence (cross-device sync) ----------
+function sanitizeProfile(p) {
+  p = p || {};
+  const num = (v, max) => { let n = Math.floor(Number(v) || 0); if (n < 0) n = 0; return max ? Math.min(n, max) : n; };
+  const ach = {};
+  if (p.achievements && typeof p.achievements === 'object') {
+    Object.keys(p.achievements).slice(0, 50).forEach((k) => { ach[String(k).slice(0, 40)] = Number(p.achievements[k]) || Date.now(); });
+  }
+  return {
+    username: typeof p.username === 'string' ? p.username.slice(0, 20) : '',
+    gamesPlayed: num(p.gamesPlayed, 1e7), gamesWon: num(p.gamesWon, 1e7), gamesLost: num(p.gamesLost, 1e7),
+    totalPlayMs: num(p.totalPlayMs, 1e12), totalValidWords: num(p.totalValidWords, 1e8),
+    longestWord: typeof p.longestWord === 'string' ? p.longestWord.slice(0, 30) : '',
+    fastestMs: p.fastestMs == null ? null : num(p.fastestMs, 600000),
+    currentStreak: num(p.currentStreak, 1e6), bestStreak: num(p.bestStreak, 1e6),
+    xp: num(p.xp, 1e9), achievements: ach,
+  };
+}
+// Monotonic merge: keep the best of each field so progress is never lost across devices.
+function mergeProfiles(stored, incoming) {
+  const s = sanitizeProfile(incoming);
+  if (!stored) return s;
+  return {
+    username: s.username || stored.username || '',
+    gamesPlayed: Math.max(stored.gamesPlayed || 0, s.gamesPlayed),
+    gamesWon: Math.max(stored.gamesWon || 0, s.gamesWon),
+    gamesLost: Math.max(stored.gamesLost || 0, s.gamesLost),
+    totalPlayMs: Math.max(stored.totalPlayMs || 0, s.totalPlayMs),
+    totalValidWords: Math.max(stored.totalValidWords || 0, s.totalValidWords),
+    longestWord: (stored.longestWord || '').length >= s.longestWord.length ? (stored.longestWord || '') : s.longestWord,
+    fastestMs: stored.fastestMs == null ? s.fastestMs : s.fastestMs == null ? stored.fastestMs : Math.min(stored.fastestMs, s.fastestMs),
+    currentStreak: Math.max(stored.currentStreak || 0, s.currentStreak),
+    bestStreak: Math.max(stored.bestStreak || 0, s.bestStreak),
+    xp: Math.max(stored.xp || 0, s.xp),
+    achievements: Object.assign({}, stored.achievements || {}, s.achievements),
+  };
+}
+function identityFor(req) {
+  if (req.user && req.user.id) return { id: 'u:' + req.user.id, kind: 'account' };
+  const gid = (req.query && req.query.guestId) || (req.body && req.body.guestId);
+  if (typeof gid === 'string' && /^[a-zA-Z0-9_]{6,64}$/.test(gid)) return { id: 'g:' + gid, kind: 'guest' };
+  return null;
+}
+app.get('/api/profile', async (req, res) => {
+  const idn = identityFor(req);
+  const backend = store.info().backend;
+  if (!idn) return res.json({ profile: null, identity: null, backend });
+  const profile = await store.getProfile(idn.id).catch(() => null);
+  res.json({ profile, identity: idn.kind, backend });
+});
+app.post('/api/profile', async (req, res) => {
+  const idn = identityFor(req);
+  if (!idn) return res.status(400).json({ error: 'no identity' });
+  const incoming = sanitizeProfile(req.body && req.body.profile);
+  let toSave;
+  if (req.body && req.body.replace) toSave = incoming;
+  else { const stored = await store.getProfile(idn.id).catch(() => null); toSave = mergeProfiles(stored, incoming); }
+  const saved = await store.saveProfile(idn.id, toSave).catch(() => null);
+  res.json({ profile: saved, identity: idn.kind });
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -300,6 +364,26 @@ io.on('connection', (socket) => {
     socket.leave(LOBBY);
   });
 
+  // ---- Peek at a room (for invite links) ----
+  socket.on('peek-room', (raw) => {
+    const code = (raw && typeof raw.code === 'string' ? raw.code : '').trim().toUpperCase().slice(0, 10);
+    const r = rooms[code];
+    if (!r) {
+      socket.emit('room-peek', { code, exists: false });
+      return;
+    }
+    socket.emit('room-peek', {
+      code,
+      exists: true,
+      name: r.name,
+      host: hostName(r),
+      players: r.players.length,
+      max: MAX_PLAYERS,
+      status: r.started ? 'playing' : 'waiting',
+      full: r.players.length >= MAX_PLAYERS,
+    });
+  });
+
   // ---- Create a brand-new room ----
   socket.on('create-room', (raw) => {
     const username = sanitizeName(raw && raw.username);
@@ -510,6 +594,8 @@ function handleLeave(socket) {
 }
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Word Race running at http://localhost:${PORT}`);
+store.init().catch(() => {}).then(() => {
+  server.listen(PORT, () => {
+    console.log(`Word Race running at http://localhost:${PORT}`);
+  });
 });
