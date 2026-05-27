@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Word Race</title>
-<meta name="description" content="Real-time multiplayer word prefix race. Last player standing wins.">
+<meta name="description" content="Real-time multiplayer word prefix race. Score points, avoid mistakes — most points wins.">
 <meta name="theme-color" content="#eef1fb">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" type="image/png" href="/icon-192.png">
@@ -165,6 +165,13 @@
   .badge.host { background: #ecfdf5; color: #047857; }
   .pscore { font-variant-numeric: tabular-nums; font-weight: 800; color: var(--brand-ink); background: var(--brand-soft); border: 1px solid #d9d8ff; border-radius: 999px; padding: 2px 10px; font-size: 13px; }
   .player-list li.dead .pscore { color: var(--bad); background: #fff1f2; border-color: #fecdd3; }
+  .miss { font-size: 12px; font-weight: 700; color: var(--bad); background: #fff1f2; border: 1px solid #fecdd3; border-radius: 999px; padding: 2px 8px; }
+  .scoreboard { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 8px; margin: 14px 0; text-align: left; }
+  .sb-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; font-size: 15px; }
+  .sb-row.top { background: #fffbeb; }
+  .sb-rank { width: 26px; text-align: center; }
+  .sb-name { flex: 1; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sb-score { font-weight: 800; color: var(--brand-ink); font-variant-numeric: tabular-nums; }
 
   /* Settings segmented control */
   .settings { background: var(--surface-2); border: 1px solid var(--border); border-radius: 14px; padding: 14px; margin-bottom: 18px; }
@@ -294,7 +301,7 @@
       <div class="brand-badge">W</div>
       <div>
         <div class="brand-title">Word <span class="accent">Race</span></div>
-        <div class="brand-sub">Name a word for the prefix. Last one standing wins.</div>
+        <div class="brand-sub">Name words for the prefix. +10 each, −20 per slip, most points wins.</div>
       </div>
     </div>
     <div id="homeErr" class="err"></div>
@@ -356,34 +363,7 @@
           <button type="button" data-time="60">60s</button>
         </div>
       </div>
-      <div class="setting-group">
-        <label>Prefix mode</label>
-        <div class="seg seg-rich" id="prefixSegCreate">
-          <button type="button" data-mode="shuffle">
-            <span class="pm-chips"><i>bo</i><span class="pm-arrow">→</span><i>st</i><span class="pm-arrow">→</span><i>pr</i></span>
-            <span class="pm-label">🔀 Shuffle</span>
-            <span class="pm-cap">new prefix each word</span>
-          </button>
-          <button type="button" data-mode="same">
-            <span class="pm-chips"><i>st</i><i>st</i><i>st</i></span>
-            <span class="pm-label">📌 Same prefix</span>
-            <span class="pm-cap">one prefix all game</span>
-          </button>
-        </div>
-      </div>
-      <div class="setting-group">
-        <label>Game mode</label>
-        <div class="seg seg-rich" id="modeSegCreate">
-          <button type="button" data-gm="survival">
-            <span class="pm-label">💀 Survival</span>
-            <span class="pm-cap">one slip and you're out</span>
-          </button>
-          <button type="button" data-gm="scored">
-            <span class="pm-label">🏅 Scored</span>
-            <span class="pm-cap">points · knockout at 0</span>
-          </button>
-        </div>
-      </div>
+      <div class="setting-hint">One prefix all match · <b>+10</b> per correct word · <b>−20</b> per mistake · 3 mistakes and you're out · most points wins.</div>
     </div>
     <div class="stack">
       <button id="createGoBtn">Create room</button>
@@ -450,34 +430,6 @@
           <button type="button" data-time="60">60s</button>
         </div>
       </div>
-      <div class="setting-group">
-        <label>Prefix mode</label>
-        <div class="seg seg-rich" id="prefixSeg">
-          <button type="button" data-mode="shuffle">
-            <span class="pm-chips"><i>bo</i><span class="pm-arrow">→</span><i>st</i><span class="pm-arrow">→</span><i>pr</i></span>
-            <span class="pm-label">🔀 Shuffle</span>
-            <span class="pm-cap">new prefix each word</span>
-          </button>
-          <button type="button" data-mode="same">
-            <span class="pm-chips"><i>st</i><i>st</i><i>st</i></span>
-            <span class="pm-label">📌 Same prefix</span>
-            <span class="pm-cap">one prefix all game</span>
-          </button>
-        </div>
-      </div>
-      <div class="setting-group">
-        <label>Game mode</label>
-        <div class="seg seg-rich" id="modeSeg">
-          <button type="button" data-gm="survival">
-            <span class="pm-label">💀 Survival</span>
-            <span class="pm-cap">one slip and you're out</span>
-          </button>
-          <button type="button" data-gm="scored">
-            <span class="pm-label">🏅 Scored</span>
-            <span class="pm-cap">points · knockout at 0</span>
-          </button>
-        </div>
-      </div>
       <div class="setting-hint" id="settingHint"></div>
     </div>
 
@@ -526,6 +478,7 @@
     <h1>You're out</h1>
     <div id="outReason" class="out-reason"></div>
     <div id="outWinnerLine" class="out-winner-line"></div>
+    <div id="outScoreboard"></div>
     <div id="outRecap"></div>
     <button id="watchBtn" class="ghost">Keep watching</button>
     <button id="outBackBtn" class="ghost secondary-row">Back to room</button>
@@ -539,6 +492,7 @@
     <h1>Winner</h1>
     <div id="winnerName" class="winner-name"></div>
     <div id="winnerNote" class="subtitle"></div>
+    <div id="winnerScoreboard"></div>
     <div id="winnerRecap"></div>
     <button id="playAgainBtn">Back to room</button>
     <button id="winnerProfileBtn" class="ghost secondary-row">My profile</button>
@@ -584,11 +538,11 @@
     roomCode: null, playerId: null, isCreator: false,
     currentPlayerId: null, isMyTurn: false, alive: true,
     timerInterval: null, timerEnd: 0, lastWord: null, usedWords: [],
-    settings: { turnTimeSec: 30, prefixMode: 'shuffle', mode: 'survival' }, lastRecap: null, wordBy: {},
+    settings: { turnTimeSec: 30 }, lastRecap: null, wordBy: {},
   };
   let auth = { authenticated: false, user: null, providers: { google: false, facebook: false } };
   let dbBackend = null;
-  const createOpts = { isPublic: true, turnTimeSec: 30, prefixMode: 'shuffle', mode: 'survival' };
+  const createOpts = { isPublic: true, turnTimeSec: 30 };
   let lobbyRooms = [], lobbyAt = 0, lobbyTick = null;
 
   const $ = (id) => document.getElementById(id);
@@ -824,10 +778,9 @@
     el.innerHTML = '';
     lobbyRooms.forEach((r) => {
       const playMs = r.status === 'playing' ? r.playMs + (Date.now() - lobbyAt) : 0;
-      const modeLabel = r.prefixMode === 'same' ? 'Same prefix' : 'Shuffle';
       const tile = document.createElement('div'); tile.className = 'room-tile';
       const main = document.createElement('div'); main.className = 'rt-main';
-      main.innerHTML = `<div class="rt-name">${escapeHtml(r.name)}</div><div class="rt-sub">👥 ${r.players}/${r.max} · ${r.turnTimeSec}s · ${modeLabel}${r.status === 'playing' ? ' · ⏱ ' + fmtDuration(playMs) : ''}</div>`;
+      main.innerHTML = `<div class="rt-name">${escapeHtml(r.name)}</div><div class="rt-sub">👥 ${r.players}/${r.max} · ${r.turnTimeSec}s per turn${r.status === 'playing' ? ' · ⏱ ' + fmtDuration(playMs) : ''}</div>`;
       const right = document.createElement('div');
       if (r.status === 'playing') { right.innerHTML = '<span class="status-chip playing">In progress</span>'; }
       else if (r.full) { right.innerHTML = '<span class="status-chip full">Full</span>'; }
@@ -852,16 +805,12 @@
     $('roomNameInput').placeholder = (playerName() || 'Your') + "'s room";
     setSeg('visSeg', 'vis', createOpts.isPublic ? 'public' : 'private');
     setSeg('timeSegCreate', 'time', String(createOpts.turnTimeSec));
-    setSeg('prefixSegCreate', 'mode', createOpts.prefixMode);
-    setSeg('modeSegCreate', 'gm', createOpts.mode);
   }
   document.querySelectorAll('#visSeg button').forEach((b) => b.addEventListener('click', () => { createOpts.isPublic = b.dataset.vis === 'public'; setSeg('visSeg', 'vis', b.dataset.vis); }));
   document.querySelectorAll('#timeSegCreate button').forEach((b) => b.addEventListener('click', () => { createOpts.turnTimeSec = Number(b.dataset.time); setSeg('timeSegCreate', 'time', b.dataset.time); }));
-  document.querySelectorAll('#prefixSegCreate button').forEach((b) => b.addEventListener('click', () => { createOpts.prefixMode = b.dataset.mode; setSeg('prefixSegCreate', 'mode', b.dataset.mode); }));
-  document.querySelectorAll('#modeSegCreate button').forEach((b) => b.addEventListener('click', () => { createOpts.mode = b.dataset.gm; setSeg('modeSegCreate', 'gm', b.dataset.gm); }));
   $('createGoBtn').addEventListener('click', () => {
     setErr('createErr', ''); if (!ensureName()) { setErr('createErr', 'Enter your name on the home screen.'); return; }
-    socket.emit('create-room', { username: playerName(), name: $('roomNameInput').value.trim(), isPublic: createOpts.isPublic, turnTimeSec: createOpts.turnTimeSec, prefixMode: createOpts.prefixMode, mode: createOpts.mode });
+    socket.emit('create-room', { username: playerName(), name: $('roomNameInput').value.trim(), isPublic: createOpts.isPublic, turnTimeSec: createOpts.turnTimeSec });
   });
   $('createBack').addEventListener('click', () => show('home'));
 
@@ -930,19 +879,13 @@
   $('leaveBtn1').addEventListener('click', () => { socket.emit('leave-room'); goHome(); });
   function pushSettings(patch) {
     if (!state.isCreator) return;
-    socket.emit('update-settings', { turnTimeSec: state.settings.turnTimeSec, prefixMode: state.settings.prefixMode, mode: state.settings.mode, ...patch });
+    socket.emit('update-settings', { turnTimeSec: state.settings.turnTimeSec, ...patch });
   }
   document.querySelectorAll('#timeSeg button').forEach((btn) => btn.addEventListener('click', () => pushSettings({ turnTimeSec: Number(btn.dataset.time) })));
-  document.querySelectorAll('#prefixSeg button').forEach((btn) => btn.addEventListener('click', () => pushSettings({ prefixMode: btn.dataset.mode })));
-  document.querySelectorAll('#modeSeg button').forEach((btn) => btn.addEventListener('click', () => pushSettings({ mode: btn.dataset.gm })));
   function renderSettings(settings, isHost) {
     state.settings = settings;
     document.querySelectorAll('#timeSeg button').forEach((b) => { b.classList.toggle('selected', Number(b.dataset.time) === settings.turnTimeSec); b.disabled = !isHost; });
-    document.querySelectorAll('#prefixSeg button').forEach((b) => { b.classList.toggle('selected', b.dataset.mode === settings.prefixMode); b.disabled = !isHost; });
-    document.querySelectorAll('#modeSeg button').forEach((b) => { b.classList.toggle('selected', b.dataset.gm === (settings.mode || 'survival')); b.disabled = !isHost; });
-    const prefixText = settings.prefixMode === 'same' ? 'Same prefix all game.' : 'New prefix each word.';
-    const gameText = settings.mode === 'scored' ? 'Scored — mistakes cost points, knocked out at 0.' : 'Survival — one slip and you’re out.';
-    $('settingHint').textContent = gameText + ' ' + prefixText + (isHost ? '' : ' (host controls settings)');
+    $('settingHint').innerHTML = 'One prefix all match · <b>+10</b> per correct · <b>−20</b> per mistake · 3 mistakes and you’re out · most points wins.' + (isHost ? '' : ' (host controls settings)');
   }
   function renderPlayerList(listEl, players, opts = {}) {
     listEl.innerHTML = '';
@@ -956,7 +899,8 @@
       if (p.id === state.playerId) badges.push('<span class="badge you">you</span>');
       if (opts.creatorId && p.id === opts.creatorId) badges.push('<span class="badge host">host</span>');
       if (!p.alive) badges.push('<span class="badge">out</span>');
-      if (p.score != null) badges.unshift('<span class="pscore">' + p.score + '</span>');
+      if (p.mistakes) badges.unshift('<span class="miss">' + p.mistakes + '/3 ✗</span>');
+      badges.unshift('<span class="pscore">' + (p.score == null ? 0 : p.score) + '</span>');
       right.innerHTML = badges.join(' ');
       li.appendChild(left); li.appendChild(right); listEl.appendChild(li);
     });
@@ -1058,6 +1002,7 @@
   socket.on('game-started', () => {
     state.alive = true; state.usedWords = []; state.lastWord = null; state.lastRecap = null; state.wordBy = {};
     renderUsedWords(); renderRecap(null); $('outWinnerLine').innerHTML = '';
+    $('winnerScoreboard').innerHTML = ''; $('outScoreboard').innerHTML = '';
     setErr('waitingErr', ''); $('gameLog').textContent = ''; $('gameLog').className = 'log';
     screens.forEach((s) => $('screen-' + s).classList.toggle('active', s === 'game')); stopLobbyTick();
   });
@@ -1082,12 +1027,21 @@
     const log = $('gameLog'); log.className = 'log good';
     log.textContent = `✓ ${username} → "${word}"` + (points != null ? ` (+${points})` : '');
   });
-  socket.on('word-rejected', ({ playerId, username, reason, points, players }) => {
+  socket.on('word-rejected', ({ playerId, username, reason, points, remaining, players }) => {
     if (players) renderPlayerList($('gamePlayerList'), players, { currentPlayerId: state.currentPlayerId });
     const log = $('gameLog'); log.className = 'log bad';
     log.textContent = `✗ ${username} — ${reason}` + (points != null ? ` (${points})` : '');
-    if (playerId === state.playerId) toast(`${points} pts`);
+    if (playerId === state.playerId && remaining > 0) toast(`${points} pts · ${remaining} mistake${remaining === 1 ? '' : 's'} left`);
   });
+  function renderScoreboard(list) {
+    if (!list || !list.length) { $('winnerScoreboard').innerHTML = ''; $('outScoreboard').innerHTML = ''; return; }
+    const medals = ['🥇', '🥈', '🥉'];
+    const html = '<div class="scoreboard">' + list.map((p, i) =>
+      `<div class="sb-row${i === 0 ? ' top' : ''}"><span class="sb-rank">${medals[i] || (i + 1) + '.'}</span><span class="sb-name">${escapeHtml(p.username)}</span><span class="sb-score">${p.score}</span></div>`
+    ).join('') + '</div>';
+    $('winnerScoreboard').innerHTML = html;
+    $('outScoreboard').innerHTML = html;
+  }
   socket.on('player-eliminated', ({ playerId, username, reason, players }) => {
     if (players) renderPlayerList($('gamePlayerList'), players, { currentPlayerId: state.currentPlayerId });
     if (playerId !== state.playerId) { const log = $('gameLog'); log.className = 'log bad'; log.textContent = `✗ ${username} is out — ${reason}`; }
@@ -1098,13 +1052,15 @@
     screens.forEach((s) => $('screen-' + s).classList.toggle('active', s === 'out')); stopLobbyTick();
   });
   socket.on('game-result', (result) => { state.lastRecap = applyGameResult(result); renderRecap(state.lastRecap); pushProfile(); });
-  socket.on('winner', ({ winnerId, winnerName, wordsUsed }) => {
+  socket.on('winner', ({ winnerId, winnerName, scoreboard }) => {
     stopTimerAnimation(); state.isMyTurn = false;
     const iWon = !!winnerId && winnerId === state.playerId;
+    const topScore = scoreboard && scoreboard.length ? scoreboard[0].score : null;
     $('winnerName').textContent = winnerName || 'Nobody';
-    $('winnerNote').textContent = wordsUsed && wordsUsed.length ? `${wordsUsed.length} word${wordsUsed.length === 1 ? '' : 's'} played this game.` : '';
+    $('winnerNote').textContent = topScore != null ? `${topScore} points · most points wins` : '';
+    renderScoreboard(scoreboard);
     if (iWon || state.alive) { screens.forEach((s) => $('screen-' + s).classList.toggle('active', s === 'winner')); }
-    else { $('outWinnerLine').innerHTML = winnerName ? `🏆 <strong>${escapeHtml(winnerName)}</strong> won` : 'Game over'; screens.forEach((s) => $('screen-' + s).classList.toggle('active', s === 'out')); }
+    else { $('outWinnerLine').innerHTML = winnerName ? `🏆 <strong>${escapeHtml(winnerName)}</strong> wins on points` : 'Game over'; screens.forEach((s) => $('screen-' + s).classList.toggle('active', s === 'out')); }
     stopLobbyTick();
   });
 
