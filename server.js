@@ -3,10 +3,14 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const { Server } = require('socket.io');
+const { setupAuth } = require('./auth');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
+
+// Auth scaffold (Google/Facebook) — guest-only until credentials are provided as env vars.
+setupAuth(app);
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -32,8 +36,46 @@ const DEFAULT_TURN_TIME_MS = 30000;
 const ALLOWED_TURN_TIMES = [15, 30, 45, 60]; // seconds the host may choose
 const PREFIX_MODES = ['shuffle', 'same'];
 const NEXT_TURN_DELAY_MS = 1200;
+const MAX_PLAYERS = 12;
+const LOBBY = 'lobby';
 
 const rooms = Object.create(null);
+
+// ---------- helpers ----------
+function sanitizeName(u) {
+  return typeof u === 'string' ? u.trim().slice(0, 20) : '';
+}
+
+function genCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code;
+  do {
+    code = Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+  } while (rooms[code]);
+  return code;
+}
+
+function makeRoom(socketId, { name, isPublic, turnTimeSec, prefixMode }) {
+  const code = genCode();
+  rooms[code] = {
+    code,
+    name: name || 'Game room',
+    isPublic: isPublic !== false,
+    createdAt: Date.now(),
+    players: [],
+    started: false,
+    currentTurnIndex: 0,
+    currentPrefix: null,
+    usedWords: new Set(),
+    timer: null,
+    creatorId: socketId,
+    settings: {
+      turnTimeMs: ALLOWED_TURN_TIMES.includes(Number(turnTimeSec)) ? Number(turnTimeSec) * 1000 : DEFAULT_TURN_TIME_MS,
+      prefixMode: PREFIX_MODES.includes(prefixMode) ? prefixMode : 'shuffle',
+    },
+  };
+  return rooms[code];
+}
 
 function randomPrefix(exclude) {
   if (PREFIXES.length === 1) return PREFIXES[0];
@@ -59,16 +101,75 @@ function publicSettings(room) {
   };
 }
 
+function hostName(room) {
+  const host = room.players.find((p) => p.id === room.creatorId) || room.players[0];
+  return host ? host.username : '—';
+}
+
+function roomSummaries() {
+  const list = [];
+  for (const code in rooms) {
+    const r = rooms[code];
+    if (!r.isPublic || r.players.length === 0) continue;
+    list.push({
+      code: r.code,
+      name: r.name,
+      host: hostName(r),
+      players: r.players.length,
+      max: MAX_PLAYERS,
+      status: r.started ? 'playing' : 'waiting',
+      playMs: r.started ? Math.max(0, Date.now() - (r.gameStartedAt || Date.now())) : 0,
+      turnTimeSec: Math.round(r.settings.turnTimeMs / 1000),
+      prefixMode: r.settings.prefixMode,
+      full: r.players.length >= MAX_PLAYERS,
+    });
+  }
+  list.sort((a, b) => (a.status === b.status ? b.players - a.players : a.status === 'waiting' ? -1 : 1));
+  return list;
+}
+
+function broadcastLobby() {
+  io.to(LOBBY).emit('lobby-update', { rooms: roomSummaries() });
+}
+
 function broadcastRoom(roomCode) {
   const room = rooms[roomCode];
   if (!room) return;
   io.to(roomCode).emit('room-update', {
     roomCode,
+    roomName: room.name,
+    isPublic: room.isPublic,
     players: publicPlayers(room),
     creatorId: room.creatorId,
     started: room.started,
     settings: publicSettings(room),
   });
+}
+
+function validateJoin(room, username) {
+  if (!room) return 'Room not found — check the code.';
+  if (room.started) return 'That game has already started.';
+  if (room.players.find((p) => p.username.toLowerCase() === username.toLowerCase())) return 'That name is taken in this room.';
+  if (room.players.length >= MAX_PLAYERS) return `Room is full (${MAX_PLAYERS} max).`;
+  return null;
+}
+
+function joinRoomInternal(socket, room, username) {
+  socket.leave(LOBBY);
+  socket.join(room.code);
+  socket.data.roomCode = room.code;
+  socket.data.username = username;
+  room.players.push({ id: socket.id, username, alive: true });
+  if (room.players.length === 1) room.creatorId = socket.id;
+  socket.emit('joined', {
+    roomCode: room.code,
+    roomName: room.name,
+    isPublic: room.isPublic,
+    playerId: socket.id,
+    isCreator: room.creatorId === socket.id,
+  });
+  broadcastRoom(room.code);
+  broadcastLobby();
 }
 
 function clearRoomTimer(room) {
@@ -96,7 +197,6 @@ function startTurn(roomCode) {
     return;
   }
 
-  // Make sure currentTurnIndex points at an alive player
   if (!room.players[room.currentTurnIndex] || !room.players[room.currentTurnIndex].alive) {
     advanceTurnIndex(room);
   }
@@ -161,10 +261,18 @@ function endGame(roomCode) {
   });
   if (winner) emitGameResult(room, winner, true, 1);
   room.started = false;
-  // Reset alive state so the room can be replayed.
+  // Drop players whose sockets disconnected during the game (avoids ghost rooms).
+  room.players = room.players.filter((p) => io.sockets.sockets.get(p.id));
+  if (room.players.length === 0) {
+    delete rooms[roomCode];
+    broadcastLobby();
+    return;
+  }
+  if (!room.players.find((p) => p.id === room.creatorId)) room.creatorId = room.players[0].id;
   room.players.forEach((p) => (p.alive = true));
   room.usedWords = new Set();
   broadcastRoom(roomCode);
+  broadcastLobby();
 }
 
 function emitGameResult(room, player, won, placement) {
@@ -183,59 +291,67 @@ function emitGameResult(room, player, won, placement) {
 }
 
 io.on('connection', (socket) => {
-  socket.on('join-room', (raw) => {
-    let { username, roomCode } = raw || {};
-    if (typeof username !== 'string' || typeof roomCode !== 'string') {
-      socket.emit('error-msg', { message: 'Username and room code required.' });
-      return;
-    }
-    username = username.trim().slice(0, 20);
-    roomCode = roomCode.trim().toUpperCase().slice(0, 10);
-    if (!username || !roomCode) {
-      socket.emit('error-msg', { message: 'Username and room code required.' });
-      return;
-    }
+  // ---- Lobby browsing ----
+  socket.on('enter-lobby', () => {
+    socket.join(LOBBY);
+    socket.emit('lobby-update', { rooms: roomSummaries() });
+  });
+  socket.on('leave-lobby', () => {
+    socket.leave(LOBBY);
+  });
 
-    if (!rooms[roomCode]) {
-      rooms[roomCode] = {
-        code: roomCode,
-        players: [],
-        started: false,
-        currentTurnIndex: 0,
-        currentPrefix: null,
-        usedWords: new Set(),
-        timer: null,
-        creatorId: socket.id,
-        settings: { turnTimeMs: DEFAULT_TURN_TIME_MS, prefixMode: 'shuffle' },
-      };
+  // ---- Create a brand-new room ----
+  socket.on('create-room', (raw) => {
+    const username = sanitizeName(raw && raw.username);
+    if (!username) {
+      socket.emit('error-msg', { message: 'Pick a name first.' });
+      return;
+    }
+    let name = typeof (raw && raw.name) === 'string' ? raw.name.trim().slice(0, 30) : '';
+    if (!name) name = `${username}'s room`;
+    const room = makeRoom(socket.id, {
+      name,
+      isPublic: raw ? raw.isPublic : true,
+      turnTimeSec: raw ? raw.turnTimeSec : undefined,
+      prefixMode: raw ? raw.prefixMode : undefined,
+    });
+    joinRoomInternal(socket, room, username);
+  });
+
+  // ---- Join an existing room by code (or from the browser) ----
+  socket.on('join-room', (raw) => {
+    const username = sanitizeName(raw && raw.username);
+    const roomCode = (raw && typeof raw.roomCode === 'string' ? raw.roomCode : '').trim().toUpperCase().slice(0, 10);
+    if (!username || !roomCode) {
+      socket.emit('error-msg', { message: 'Name and room code required.' });
+      return;
     }
     const room = rooms[roomCode];
-
-    if (room.started) {
-      socket.emit('error-msg', { message: 'Game already in progress in that room.' });
+    const err = validateJoin(room, username);
+    if (err) {
+      socket.emit('error-msg', { message: err });
       return;
     }
-    if (room.players.find((p) => p.username.toLowerCase() === username.toLowerCase())) {
-      socket.emit('error-msg', { message: 'That username is already taken in this room.' });
+    joinRoomInternal(socket, room, username);
+  });
+
+  // ---- Quick play: join the busiest open public room, or spin one up ----
+  socket.on('quick-play', (raw) => {
+    const username = sanitizeName(raw && raw.username);
+    if (!username) {
+      socket.emit('error-msg', { message: 'Pick a name first.' });
       return;
     }
-    if (room.players.length >= 12) {
-      socket.emit('error-msg', { message: 'Room is full (12 players max).' });
-      return;
+    let best = null;
+    for (const code in rooms) {
+      const r = rooms[code];
+      if (r.isPublic && !r.started && r.players.length < MAX_PLAYERS &&
+          !r.players.find((p) => p.username.toLowerCase() === username.toLowerCase())) {
+        if (!best || r.players.length > best.players.length) best = r;
+      }
     }
-
-    socket.join(roomCode);
-    socket.data.roomCode = roomCode;
-    socket.data.username = username;
-    room.players.push({ id: socket.id, username, alive: true });
-    if (room.players.length === 1) room.creatorId = socket.id;
-
-    socket.emit('joined', {
-      roomCode,
-      playerId: socket.id,
-      isCreator: room.creatorId === socket.id,
-    });
-    broadcastRoom(roomCode);
+    if (!best) best = makeRoom(socket.id, { name: `${username}'s room`, isPublic: true });
+    joinRoomInternal(socket, best, username);
   });
 
   socket.on('update-settings', (raw) => {
@@ -255,7 +371,9 @@ io.on('connection', (socket) => {
     if (PREFIX_MODES.includes(prefixMode)) {
       room.settings.prefixMode = prefixMode;
     }
+    if (raw && typeof raw.isPublic === 'boolean') room.isPublic = raw.isPublic;
     broadcastRoom(roomCode);
+    broadcastLobby();
   });
 
   socket.on('start-game', () => {
@@ -263,7 +381,7 @@ io.on('connection', (socket) => {
     const room = rooms[roomCode];
     if (!room) return;
     if (room.creatorId !== socket.id) {
-      socket.emit('error-msg', { message: 'Only the room creator can start the game.' });
+      socket.emit('error-msg', { message: 'Only the host can start the game.' });
       return;
     }
     if (room.players.length < 2) {
@@ -284,6 +402,7 @@ io.on('connection', (socket) => {
     room.currentPrefix = randomPrefix();
     io.to(roomCode).emit('game-started', { players: publicPlayers(room) });
     broadcastRoom(roomCode);
+    broadcastLobby();
     startTurn(roomCode);
   });
 
@@ -373,6 +492,7 @@ function handleLeave(socket) {
       advanceTurnIndex(room);
       setTimeout(() => startTurn(roomCode), NEXT_TURN_DELAY_MS);
     }
+    broadcastLobby();
   } else {
     room.players.splice(idx, 1);
     if (room.creatorId === socket.id && room.players.length > 0) {
@@ -384,6 +504,7 @@ function handleLeave(socket) {
     } else {
       broadcastRoom(roomCode);
     }
+    broadcastLobby();
   }
   socket.data.roomCode = null;
 }

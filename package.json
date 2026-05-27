@@ -12,6 +12,10 @@
   "dependencies": {
     "express": "^4.19.2",
     "socket.io": "^4.7.5",
-    "an-array-of-english-words": "^2.0.0"
+    "an-array-of-english-words": "^2.0.0",
+    "express-session": "^1.18.0",
+    "passport": "^0.7.0",
+    "passport-google-oauth20": "^2.0.0",
+    "passport-facebook": "^3.0.0"
   }
 }
