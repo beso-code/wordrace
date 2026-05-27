@@ -58,6 +58,25 @@ function identityFor(req) {
   if (typeof gid === 'string' && /^[a-zA-Z0-9_]{6,64}$/.test(gid)) return { id: 'g:' + gid, kind: 'guest' };
   return null;
 }
+// Digital Asset Links for the Android TWA (PWABuilder / Play Store).
+// Set TWA_PACKAGE + TWA_FINGERPRINT (SHA-256, colon-separated) as Render env
+// vars after you generate the Android package — no redeploy/code change needed.
+app.get('/.well-known/assetlinks.json', (req, res) => {
+  const pkg = process.env.TWA_PACKAGE || '';
+  const fp = process.env.TWA_FINGERPRINT || '';
+  if (!pkg || !fp) return res.json([]);
+  res.json([
+    {
+      relation: ['delegate_permission/common.handle_all_urls'],
+      target: {
+        namespace: 'android_app',
+        package_name: pkg,
+        sha256_cert_fingerprints: fp.split(',').map((s) => s.trim()).filter(Boolean),
+      },
+    },
+  ]);
+});
+
 app.get('/api/profile', async (req, res) => {
   const idn = identityFor(req);
   const backend = store.info().backend;

@@ -1,7 +1,9 @@
 {
   "name": "Word Race",
   "short_name": "Word Race",
-  "description": "Real-time multiplayer word prefix race. Last player standing wins.",
+  "id": "/",
+  "description": "Real-time multiplayer word game. Name words for the prefix — +10 each, -20 per slip, most points wins.",
+  "categories": ["games", "word", "entertainment"],
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
